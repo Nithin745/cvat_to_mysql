@@ -1,12 +1,14 @@
+from copy import deepcopy, copy
 from datetime import datetime
 from time import sleep
 from collections import Counter
 import json
 import string
 import os
-import mysql.connector as sql
 from get_json import main as download_json
 from get_json import _header
+from label_map import action_map
+import pymongo
 import re
 import sys
 import requests
@@ -20,81 +22,11 @@ TASK_URL = os.environ.get('BASE_URL') + 'tasks/'
 
 
 def connect_db():
-    database = sql.connect(
-        host="3.67.247.142",
-        user="root",
-        passwd="Nj375#Dz9ebfNmJ%$7&",
-        database="test_1",
-    )
-    cursor = database.cursor()
-    return database, cursor
+    client = pymongo.MongoClient(
+        "mongodb+srv://Pradeep:ShopperAI@israel.dien7.mongodb.net/?retryWrites=true&w=majority")
+    db = client['victory']
 
-
-def inject_to_sql(query, data, many=None, kind=None):
-    mydb, my_cursor = connect_db()
-    if many:
-        my_cursor.executemany(query, data)
-    else:
-        my_cursor.execute(query, data)
-    if kind == 'select':
-        last_id = my_cursor.fetchone()
-    else:
-        mydb.commit()
-        last_id = my_cursor.lastrowid
-
-    return last_id
-
-
-def execute_sql_query(query):
-    mydb, my_cursor = connect_db()
-
-    my_cursor = mydb.cursor()
-    my_cursor.execute(query)
-    return my_cursor.fetchall()
-
-
-def get_last_entry_date(tasks):
-    date = tasks.find({}).sort('completed_date', -1)
-    print(date[0])
-    last_date = date[0]['completed_date']
-
-    return last_date.split('T')[0]
-
-
-def mark_as_processed(task_id):
-    # with open('processed_id.json', 'r') as F:
-    #     data = json.load(F)
-    # task_ids = data['task_id']
-    headers = _header()
-    payload = {"processed: True"}
-    url = TASK_URL + str(task_id)
-    res = requests.patch(url=url, json=payload, headers=headers)
-    if res.ok:
-        print(f"Marked task {task_id} as processed")
-    else:
-        print(f"Error while marking task as processed {res.text}")
-
-
-def delete_entries(task_id):
-    tup = (task_id, )
-    video_id = inject_to_sql("SELECT video_id FROM video where task_id =%s", tup, kind='select')
-    video_id = ''.join(video_id)
-
-    video_query = inject_to_sql(f"delete from video where task_id=%s", tup)
-    actions_query = inject_to_sql(f"delete from actions where video_id=%s", (video_id,))
-    buyer_query = inject_to_sql(f"delete from buyer where video_id=%s", (video_id,))
-
-
-def get_task_ids():
-    task_ids = execute_sql_query("SELECT task_id FROM video")
-    # task_ids = task_ids.fetchall()
-    task_ids = [item for tup in task_ids for item in tup]
-    print(f"Got all task ids from database {len(task_ids)}")
-
-    return task_ids
-
-
-task_ids = get_task_ids()
+    return db
 
 
 def clean_dir():
@@ -220,15 +152,18 @@ class PrepareJson:
     def add_camera_id_field(self, pattern='camera[0-9]+'):
         for obj in self.data['tasks']:
             # camera_id_idxs = (re.search('camera', obj['video'].lower()).span())
+            filename = obj['video']
+            if 'planogram' in obj['name']:
+                filename = obj['name']
             try:
-                camera_id_str = re.findall(pattern, obj['video'].lower())[0]
+                camera_id_str = re.findall(pattern, filename.lower())[0]
                 camera_id = camera_id_str[len("camera"):]
                 obj['camera_id'] = camera_id
             except:
-                print("Worning - Cannot find camera number in video {}".format(obj['video']))
+                print("Warning - Cannot find camera number in video {}".format(obj['video']))
 
 
-class PushToMySql:
+class PushToMongoDb:
     """
     This module preprocess the merged json file before pushing it to the MySql, like generating
     video_id, buery, actions etc.,
@@ -239,22 +174,40 @@ class PushToMySql:
             self.data = json.load(F)
         self.tasks = self.data['tasks']
         self.images = self.data['images']
-        self.dbtask_ids = []
+        self.db = connect_db()
         self.category = ['actions', 'action']
         self.retailer_id = 1
         self.branch_id = 71
         self.default = '-'
         self.empty = ['0', '-']
+        self.gt, self.planagram = [], []
+        self.check_previous_entries()
 
-    def get_camera_name(self, filename, pattern='camera[0-9]+'):
+    def check_previous_entries(self):
+        planagram = self.db['rishon_lezion_71_planograms'].find({})
+        gt_list = []
+        for item in planagram:
+            self.planagram.append(item['task_id'])
+
+        gt = self.db['rishon_lezion_71_gt'].find({})
+        for gt_item in gt:
+            try:
+                gt_list.append(gt_item['task_id'])
+            except KeyError:
+                continue
+        self.gt = list(set(gt_list))
+        # print(self.gt)
+
+    def get_camera_name(self, filename, planogram, pattern='camera[0-9]+'):
         """This return the camera name and camera number"""
         camera_id = False
+        if planogram:
+            filename = filename.lstrip('planogram_')
         try:
             camera_id_str = re.findall(pattern, filename.lower())[0]
             camera_id = camera_id_str[len("camera"):]
-            # print(camera_id_str)
         except:
-            print("Worning - Cannot find camera number in video {}".format(filename))
+            print("Workning - Cannot find camera number in video {}".format(filename))
 
         return camera_id_str, camera_id
 
@@ -272,95 +225,142 @@ class PushToMySql:
 
         return actions_list
 
-    def push_to_sql(self):
+    def push_to_mongo(self):
         """
-        This is the main function where we push the data to MySql
+        This is the main function where we push the data to MongoDB
         """
         for task in self.tasks:
-            video_table = []
-            action_table = []
             buyer_table = []
             person = []
+            planogram = None
+            planogram_flag = False
             # Filtering frames that belongs to current task_id
             imgs = [i for i in self.images if task['task_id'] == i['task_id']]
+            if 'planogram' in task['name']:
+                planogram_flag = True
+                filename = task['name']
+            else:
+                filename = task['video']
             for img in imgs:  # Loop through the filtered images
                 sec = self.get_sec(img['file_name'])  # This gets the seconds for the current frame
+                frame_no = self.get_frame_no(img['file_name'])
                 # Get data for all the tables video, buyer, actions
-                video, buyer, action = self.get_video_data(img, task['video'], sec, task['task_id'])
-                if buyer:
-                    for buy in buyer:
-                        f_name, person_id, age, gender = buy
-                        buyer_table.append(buy)
-                        person.append(person_id)
-                if video and len(video_table) == 0:
-                    video_table.append(video)
-                if action:
-                    for act in action:
-                        action_table.append(act)
+                if 'planogram' in task['name']:
+                    planogram_flag = True
+                    filename = task['name']
+                    image = self.build_planogram(img)
+                    self.db['rishon_lezion_71_planograms'].insert_one(image)
+                else:
+                    filename = task['video']
+                    buyer = self.get_video_data(
+                        img, filename, sec, task['task_id'], frame_no, planogram_flag)
+                    if buyer:
+                        for buy in buyer:
+                            buyer_table.append(buy.copy())
+                            if buy['buyer_id'] not in person:
+                                person.append(buy['buyer_id'])
 
-            if buyer_table and action_table:  # If buyer data and action is not empty we are ready to push it to MySql
-                if task['task_id'] in task_ids:
-                    delete_entries(task['task_id'])
-                    print(f"Deleted entries for {task['task_id']}")
-                _person = list(set(person))
-                _buyer = list(set(buyer_table))
-                final_buyer = self.filter_buyer(_person, _buyer)
+            if buyer_table:  # If buyer data and action is not empty we are ready to push it to MongoDB
+                final_buyer = self.build_collection(buyer_table, person, task['task_id'])
+                match = self.check_for_match(final_buyer, planogram_flag)
+                print(match)
+                if match:
+                    self.update_data(final_buyer, match, planogram_flag)
+                else:
+                    self.insert_new(final_buyer, planogram_flag)
+                print(task['task_id'])
+                # print(final_buyer)
+                sys.exit()
+            if planogram:
+                match = self.check_for_match(planogram, planogram_flag)
+                if match:
+                    self.update_data(planogram, match, planogram_flag)
+                else:
+                    self.insert_new(planogram, planogram_flag)
 
-                try:
-                    inject_to_sql("INSERT INTO video (video_id, date, retailer_id, branch_id, camera, task_id) VALUES \
-                            (%s, %s, %s, %s, %s, %s)", video_table, True)
-                except Exception as e:
-                    print(f"Video Error: {video_table}")
-                    print(e)
-                    # sys.exit()
-                actions = self.get_actions_buyer(action_table)
-                try:
-                    inject_to_sql("INSERT INTO buyer (video_id, buyer_id, age, gender) VALUES \
-                            (%s, %s, %s, %s)", final_buyer, True)
-                    print(f"Inserting Buyer: {final_buyer}")
-                except Exception as e:
-                    print(f"Buyer Error: {final_buyer}")
-                    print(e)
-                    # sys.exit()
-                if actions:
-                    print(f"actions task: {task['task_id']}")
-                    actions.sort(key=lambda y: y[-1])
-                    try:
-                        inject_to_sql("INSERT INTO actions (action, buyer_id, action_id, video_id, product, sec) VALUES \
-                                (%s, %s, %s, %s, %s, %s)", actions, True)
-                        print(f"Inserting Action: {actions}")
-                        print('*'*100)
-                    except Exception as e:
-                        print(f"Action Error: {actions}")
-                        print(e)
-                        # sys.exit()
-                    mark_as_processed(task['task_id'])
+    def check_for_match(self, data, planagram):
+        if planagram:
+            match = [item['task_id'] for item in data if item['task_id'] in self.planagram]
+        else:
+            match = [item['task_id'] for item in data if item['task_id'] in self.gt]
 
-    def filter_buyer(self, person, buyer):
-        """
-        This function look for buyer with both age and gender, if it doesn't find that, it will 
-        the buyer without age and gender
-        """
-        final_buyer = []
-        for i in person:
-            per = None
-            for j in buyer:
-                file, _person_id, _age, _gender = j
-                if i == _person_id and _gender not in self.empty and _age not in self.empty:
-                    per = j
-                    break
-                elif i == _person_id and _gender in self.empty and _age not in self.empty:
-                    per = j
-                    break
-                elif i == _person_id and _gender not in self.empty and _age in self.empty:
-                    per = j
-                    break
-                elif i == _person_id and _gender in self.empty and _age in self.empty:
-                    per = j
-            if per:
-                final_buyer.append(per)
+        return match
 
-        return final_buyer
+    def update_data(self, records, match, planagram):
+        if planagram:
+            delete = self.db['rishon_lezion_71_planograms'].delete_many({
+                'taks_id': {'$in': match}
+            })
+            insert = self.db['rishon_lezion_71_planograms'].insert_many(records)
+        else:
+            delete = self.db['rishon_lezion_71_gt'].delete_many({
+                'taks_id': {'$in': match}
+            })
+            insert = self.db['rishon_lezion_71_gt'].insert_many(records)
+            print(insert.inserted_ids)
+
+    def insert_new(self, records, planagram):
+        if planagram:
+            insert = self.db['rishon_lezion_71_planograms'].insert_many(records)
+        else:
+            insert = self.db['rishon_lezion_71_gt'].insert_many(records)
+            print(insert.inserted_ids)
+
+    def build_planogram(self, images):
+        for item in images['annotations']:
+            del item['id']
+            del item['image_id']
+
+        # print(images)
+        return images
+
+    def build_collection(self, buyers, persons, task_id):
+        buyers_list = []
+        for i in persons:
+            buyer_list = [item for item in buyers if item['buyer_id'] == i]
+            age, gender, filename = self.get_age(buyer_list)
+            # print(age, gender)
+            action = self.build_buyer(buyer_list)
+            buyer_dict = {
+                'age': age,
+                'gender': gender,
+                'buyer_id': filename + '_' + i,
+                'actions': action,
+                'task_id': task_id
+            }
+            buyers_list.append(buyer_dict.copy())
+        with open(filename + '.json', 'w') as F:
+            json.dump(buyers_list, F, indent=4)
+
+        return buyers_list
+
+    def build_buyer(self, buyers):
+        actions = []
+        for buyer in buyers:
+            act_dict = {
+                'name': action_map[buyer['action']],
+                'second_in_video': buyer['sec'],
+                'frame_index': buyer['frame_no'],
+                'bbox': buyer['bbox'],
+            }
+            actions.append(act_dict.copy())
+
+        return actions
+
+    def get_age(self, buyers):
+        # age, gender = None, None
+        for buyer in buyers:
+            age, gender = buyer['age'], buyer['gender']
+            if age not in self.empty and gender not in self.empty:
+                break
+            elif age in self.empty and gender not in self.empty:
+                break
+            elif age not in self.empty and gender in self.empty:
+                break
+            elif age in self.empty and gender in self.empty:
+                continue
+
+        return age, gender, buyer['filename']
 
     def get_sec(self, frame, sec=.5):
         """This method returns seconds for the given frame"""
@@ -369,23 +369,23 @@ class PushToMySql:
         # print(frame, f"{(frame * sec):.1f}")
         return f"{(frame * sec):.1f}"
 
-    def get_video_data(self, images, filename, sec, task_id):
+    def get_frame_no(self, frame):
+        """This method returns seconds for the given frame"""
+        frame = frame.rstrip('.PNG')
+
+        return int(frame.split('_')[1]) / 10
+
+    def get_video_data(self, images, filename, sec, task_id, frame_no, planogram):
         """This method extracts buyer with `id`, `action` and `hand` lables"""
-        video_data, buyer_data, action_data = False, [], []
-        camera_id_str, camera = self.get_camera_name(filename)
+        buyer_data = []
+        camera_id_str, camera = self.get_camera_name(filename, planogram)
         if 'annotations' in images:
-            date, filename = self.get_filename(filename, camera_id_str)
-            time = datetime.strptime(date, '%Y-%m-%d_%H-%M-%S')
-            video_data = (filename, time, self.retailer_id, self.branch_id, camera, task_id)
+            date, filename = self.get_filename(filename, camera_id_str, planogram)
             buyer, action = None, None
-            # print(f"Current task id: {task_id}")
             if camera and images['annotations'] != 'none':
                 for annotation in images['annotations']:
                     if annotation['category_name'] == 'actions' and annotation['attributes'] is not None:
                         if 'person_id' in annotation['attributes'] and 'action' in annotation['attributes']:
-                            # print(f"Task in action: {task_id}")
-                            # if not task_id in tasks_id:
-                            #     tasks_id.append(task_id)
                             age, gender, product = self.default, self.default, self.default
                             person_id, action = annotation['attributes']['person_id'], annotation['attributes']['action']
                             if 'demographic_age' in annotation['attributes']:
@@ -398,16 +398,21 @@ class PushToMySql:
                                 action = 'hts'
                             elif action == 'h':
                                 action = 'hh'
-                            buyer = (filename, person_id, age, gender)
-                            action = (action, person_id, 0, filename, product, sec)
+                            buyer = {
+                                # 'task_id': task_id,
+                                'filename': filename,
+                                'buyer_id': person_id,
+                                'age': age,
+                                'gender': gender,
+                                'action': action,
+                                'sec': sec,
+                                'frame_no': frame_no,
+                                'bbox': annotation['bbox']
+                            }
                             if person_id == '' or person_id in words:
                                 buyer = None
-                                action = None
                     elif annotation['category_name'] == 'hands' and annotation['attributes'] is not None:
                         if 'person_id' in annotation['attributes'] and 'hand' in annotation['attributes']:
-                            # print(f"Task in hand: {task_id}")
-                            # if not task_id in tasks_id:
-                            #     tasks_id.append(task_id)
                             age, gender, product = self.default, self.default, self.default
                             person_id, hand = annotation['attributes']['person_id'], annotation['attributes']['hand']
                             if 'demographic_age' in annotation['attributes']:
@@ -420,24 +425,31 @@ class PushToMySql:
                                 hand = 'hts'
                             elif hand == 'h':
                                 hand = 'hh'
-                            buyer = (filename, person_id, age, gender)
-                            action = (hand, person_id, 0, filename, product, sec)
+                            buyer = {
+                                # 'task_id': task_id,
+                                'filename': filename,
+                                'buyer_id': person_id,
+                                'age': age,
+                                'gender': gender,
+                                'action': hand,
+                                'sec': sec,
+                                'frame_no': frame_no,
+                                'bbox': annotation['bbox']
+                            }
                             if person_id == '' or person_id in words:
                                 buyer = None
-                                action = None
                     if buyer:
                         buyer_data.append(buyer)
                         buyer = None
-                    if action:
-                        action_data.append(action)
-                        action = None
                     else:
                         continue
 
-        return video_data, buyer_data, action_data
+        return buyer_data
 
-    def get_filename(self, filename, camera):
+    def get_filename(self, filename: str, camera, planogram):
         """This method generates filename for the video_id column"""
+        if planogram:
+            filename = filename.lstrip('planogram_')
         date_time = '_'.join(filename.split('_', 2)[:2])
         return date_time, date_time + f'_{self.retailer_id}_{self.branch_id}_' + camera
 
@@ -448,7 +460,7 @@ def main():
     """
     camera = ['camera5', 'camera6', 'camera7']
     for cam in camera:
-        download_json(cam)
+        # download_json(cam)
         if any(os.scandir(src_folder)):
             for file in os.listdir(src_folder):
                 path = os.path.join(src_folder, file)
@@ -456,13 +468,16 @@ def main():
                 prepare_data.extract_data()
                 cleanned_file = prepare_data.save_json()
                 target_path = os.path.join(dest_path, cleanned_file)
-                mongo_data = PushToMySql(target_path)
-                mongo_data.push_to_sql()
-            clean_dir()
+                mongo_data = PushToMongoDb(target_path)
+                mongo_data.push_to_mongo()
+            # clean_dir()
 
 
 if __name__ == '__main__':
     main()
+    # target_path = os.path.join(dest_path, 'Shir.json')
+    # mongo_data = PushToMongoDb(target_path)
+    # mongo_data.push_to_mongo()
     # log = {'updated_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     # with open('log1.json', 'w') as F:
     #     json.dump(log, F, indent=4)
