@@ -24,7 +24,7 @@ def connect_db():
         host="3.67.247.142",
         user="root",
         passwd="Nj375#Dz9ebfNmJ%$7&",
-        database="test_1",
+        database="cvat_data",
     )
     cursor = database.cursor()
     return database, cursor
@@ -220,12 +220,15 @@ class PrepareJson:
     def add_camera_id_field(self, pattern='camera[0-9]+'):
         for obj in self.data['tasks']:
             # camera_id_idxs = (re.search('camera', obj['video'].lower()).span())
+            filename = obj['video']
+            if 'planogram' in obj['name']:
+                filename = obj['name']
             try:
-                camera_id_str = re.findall(pattern, obj['video'].lower())[0]
+                camera_id_str = re.findall(pattern, filename.lower())[0]
                 camera_id = camera_id_str[len("camera"):]
                 obj['camera_id'] = camera_id
             except:
-                print("Worning - Cannot find camera number in video {}".format(obj['video']))
+                print("Warning - Cannot find camera number in video {}".format(obj['video']))
 
 
 class PushToMySql:
