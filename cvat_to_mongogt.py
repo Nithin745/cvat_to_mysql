@@ -48,6 +48,11 @@ def clean_dir():
         for item in result:
             os.remove(os.path.join(dest_path, item))
 
+def delete_entries():
+    db = connect_db()
+    db['rishon_lezion_71_planograms'].delete_many({})
+    db['rishon_lezion_71_pg_tasks'].delete_many({})
+
 
 class PrepareJson:
     """
@@ -261,8 +266,9 @@ class PushToMongoDb:
                     planogram_flag = True
                     filename = task['name']
                     camera_id_str, camera = self.get_camera_name(filename, False)
-                    date, filename = self.get_filename(filename, camera_id_str, False)
-                    img['filename'] = filename
+                    date, filename = self.get_filename(filename, camera_id_str, True)
+                    # print(filename)
+                    img['name'] = filename
                     img['completed_date'] = task['completed_date']
                     image = self.build_planogram(img)
                     planogram_coll.append(image.copy())
@@ -475,6 +481,8 @@ class PushToMongoDb:
         """This method generates filename for the video_id column"""
         if planogram:
             filename = filename.lstrip('planogram_')
+            date_time = '_'.join(filename.split('_', 2)[:2])
+            return date_time, date_time + '_' + camera
         date_time = '_'.join(filename.split('_', 2)[:2])
         return date_time, date_time + f'_{self.retailer_id}_{self.branch_id}_' + camera
 
@@ -503,6 +511,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+    # delete_entries()
     # target_path = os.path.join(dest_path, 'Shir.json')
     # mongo_data = PushToMongoDb(target_path)
     # mongo_data.push_to_mongo()
