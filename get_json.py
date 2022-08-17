@@ -191,15 +191,7 @@ def generate_filter_query(project_id, to_date, from_date=None, status="completed
                 ]
             },
             {
-                "==": [
-                    {
-                        "var": "processed"
-                    },
-                    False
-                ]
-            },
-            {
-                "==": [{"var": "camera"}, camera]
+                ">=": [{"var": "id"}, 15655]
             }
         ]
     }
@@ -267,7 +259,7 @@ def get_task_ids(admin_data, date_after=None, cam=None):
             print(f"No new entries for: {name}")
 
 
-def main(cam, date=None):
+def main(cam=None, date=None):
     # filename = 'admin_data.csv'
     admin_data = pd.read_csv(filename, na_values=True)
     col_name = ['csrftoken', 'token', 'sessionid']

@@ -6,12 +6,10 @@ import json
 import string
 import os
 from get_json import main as download_json
-from get_json import _header
 from label_map import action_map
 import pymongo
 import re
 import sys
-import requests
 
 
 words = string.ascii_lowercase
@@ -27,6 +25,17 @@ def connect_db():
     db = client['victory']
 
     return db
+
+
+def get_last_entry_date(tasks):
+    date = tasks.find({}).sort('completed_date', -1)
+    # print(date[0])
+    try:
+        last_date = date[0]['completed_date']
+    except:
+        return None
+    
+    return last_date.split('T')[0]
 
 
 def clean_dir():
@@ -184,12 +193,12 @@ class PushToMongoDb:
         self.check_previous_entries()
 
     def check_previous_entries(self):
-        planagram = self.db['rishon_lezion_71_planograms'].find({})
+        planagram = self.db['rishon_lezion_71_planograms'].find({}, projection ={'task_id':True})
         gt_list = []
         for item in planagram:
             self.planagram.append(item['task_id'])
 
-        gt = self.db['rishon_lezion_71_gt'].find({})
+        gt = self.db['rishon_lezion_71_gt'].find({}, projection ={'task_id':True})
         for gt_item in gt:
             try:
                 gt_list.append(gt_item['task_id'])
@@ -229,8 +238,10 @@ class PushToMongoDb:
         """
         This is the main function where we push the data to MongoDB
         """
+        buyer_table = []
+        planogram_coll = []
+        pg_tasks = []
         for task in self.tasks:
-            buyer_table = []
             person = []
             planogram = None
             planogram_flag = False
@@ -246,37 +257,45 @@ class PushToMongoDb:
                 frame_no = self.get_frame_no(img['file_name'])
                 # Get data for all the tables video, buyer, actions
                 if 'planogram' in task['name']:
+                    pg_tasks.append(task)
                     planogram_flag = True
                     filename = task['name']
+                    camera_id_str, camera = self.get_camera_name(filename, False)
+                    date, filename = self.get_filename(filename, camera_id_str, False)
+                    img['filename'] = filename
+                    img['completed_date'] = task['completed_date']
                     image = self.build_planogram(img)
-                    self.db['rishon_lezion_71_planograms'].insert_one(image)
+                    planogram_coll.append(image.copy())
+                    # self.db['rishon_lezion_71_planograms'].insert_one(image)
                 else:
                     filename = task['video']
                     buyer = self.get_video_data(
                         img, filename, sec, task['task_id'], frame_no, planogram_flag)
                     if buyer:
                         for buy in buyer:
+                            buy['completed_date'] = task['completed_date']
                             buyer_table.append(buy.copy())
                             if buy['buyer_id'] not in person:
                                 person.append(buy['buyer_id'])
 
-            if buyer_table:  # If buyer data and action is not empty we are ready to push it to MongoDB
-                final_buyer = self.build_collection(buyer_table, person, task['task_id'])
-                match = self.check_for_match(final_buyer, planogram_flag)
-                print(match)
-                if match:
-                    self.update_data(final_buyer, match, planogram_flag)
-                else:
-                    self.insert_new(final_buyer, planogram_flag)
-                print(task['task_id'])
-                # print(final_buyer)
-                sys.exit()
-            if planogram:
-                match = self.check_for_match(planogram, planogram_flag)
-                if match:
-                    self.update_data(planogram, match, planogram_flag)
-                else:
-                    self.insert_new(planogram, planogram_flag)
+        if buyer_table:  # If buyer data and action is not empty we are ready to push it to MongoDB
+            final_buyer = self.build_collection(buyer_table, person, task['task_id'])
+            match = self.check_for_match(final_buyer, planogram_flag)
+            print(f"Buyer Length: {len(final_buyer)}")
+            # if match:
+            #     self.update_data(final_buyer, match, planogram_flag)
+            # else:
+            #     self.insert_new(final_buyer, planogram_flag)
+            # print(task['task_id'])
+            # print(final_buyer)
+        if planogram_coll:
+            # print(planogram_coll)
+            match = self.check_for_match(planogram_coll, planogram_flag)
+            print(f"Planogram length: {len(planogram_coll)} {len(pg_tasks)}")
+            if match:
+                self.update_data(planogram_coll, match, planogram_flag, pg_tasks)
+            else:
+                self.insert_new(planogram_coll, planogram_flag, pg_tasks)
 
     def check_for_match(self, data, planagram):
         if planagram:
@@ -286,12 +305,16 @@ class PushToMongoDb:
 
         return match
 
-    def update_data(self, records, match, planagram):
+    def update_data(self, records, match, planagram, tasks=None):
         if planagram:
             delete = self.db['rishon_lezion_71_planograms'].delete_many({
                 'taks_id': {'$in': match}
             })
-            insert = self.db['rishon_lezion_71_planograms'].insert_many(records)
+            delete_task = seld.db['rishon_lezion_71_pg_tasks']. delete_many({
+                'taks_id': {'$in': match}
+                })
+            insert = self.db['rishon_lezion_71_planograms'].insert_many(tasks)
+            task_insert = self.db['rishon_lezion_71_pg_tasks'].insert_many(tasks)
         else:
             delete = self.db['rishon_lezion_71_gt'].delete_many({
                 'taks_id': {'$in': match}
@@ -299,14 +322,16 @@ class PushToMongoDb:
             insert = self.db['rishon_lezion_71_gt'].insert_many(records)
             print(insert.inserted_ids)
 
-    def insert_new(self, records, planagram):
+    def insert_new(self, records, planagram, pg_tasks):
         if planagram:
             insert = self.db['rishon_lezion_71_planograms'].insert_many(records)
+            insert = self.db['rishon_lezion_71_pg_tasks'].insert_many(pg_tasks)
         else:
             insert = self.db['rishon_lezion_71_gt'].insert_many(records)
             print(insert.inserted_ids)
 
-    def build_planogram(self, images):
+    def build_planogram(self, images: dict) -> dict:
+        del images['file_name']
         for item in images['annotations']:
             del item['id']
             del item['image_id']
@@ -392,8 +417,8 @@ class PushToMongoDb:
                                 age = annotation['attributes']['demographic_age']
                             if 'demographic_gender' in annotation['attributes']:
                                 gender = annotation['attributes']['demographic_gender']
-                            if 'product' in annotation['attributes']:
-                                product = annotation['attributes']['product']
+                            # if 'product' in annotation['attributes']:
+                            #     product = annotation['attributes']['product']
                             if action == 'ts':
                                 action = 'hts'
                             elif action == 'h':
@@ -419,8 +444,8 @@ class PushToMongoDb:
                                 age = annotation['attributes']['demographic_age']
                             if 'demographic_gender' in annotation['attributes']:
                                 gender = annotation['attributes']['demographic_gender']
-                            if 'product' in annotation['attributes']:
-                                product = annotation['attributes']['product']
+                            # if 'product' in annotation['attributes']:
+                            #     product = annotation['attributes']['product']
                             if hand == 'ts':
                                 hand = 'hts'
                             elif hand == 'h':
@@ -458,19 +483,22 @@ def main():
     """This is the main function that calls all the modules to downloa all the json file,
     process it and  push it to MySql
     """
-    camera = ['camera5', 'camera6', 'camera7']
-    for cam in camera:
-        # download_json(cam)
-        if any(os.scandir(src_folder)):
-            for file in os.listdir(src_folder):
-                path = os.path.join(src_folder, file)
-                prepare_data = PrepareJson(path, file, dest_path)
-                prepare_data.extract_data()
-                cleanned_file = prepare_data.save_json()
-                target_path = os.path.join(dest_path, cleanned_file)
-                mongo_data = PushToMongoDb(target_path)
-                mongo_data.push_to_mongo()
-            # clean_dir()
+    db = connect_db()
+    date = get_last_entry_date(db['rishon_lezion_71_planograms'])
+    if date:
+        download_json(date=date)
+    download_json()
+    if any(os.scandir(src_folder)):
+        for file in os.listdir(src_folder):
+            path = os.path.join(src_folder, file)
+            prepare_data = PrepareJson(path, file, dest_path)
+            prepare_data.extract_data()
+            cleanned_file = prepare_data.save_json()
+            target_path = os.path.join(dest_path, cleanned_file)
+            print(f"Path: {target_path}")
+            mongo_data = PushToMongoDb(target_path)
+            mongo_data.push_to_mongo()
+        clean_dir()
 
 
 if __name__ == '__main__':
