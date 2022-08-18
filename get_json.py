@@ -196,10 +196,12 @@ def generate_filter_query(project_id, to_date, from_date=None, status="completed
         ]
     }
     if from_date:
-        for item in query['and']:
-            for key in item.keys():
-                if key == "<=":
-                    item[key].insert(0, from_date)
+        date_filter = {">=": [{"var": "updated_date"}, from_date]}
+        query['and'].append(date_filter)
+        # for item in query['and']:
+        #     for key in item.keys():
+        #         if key == "<=":
+        #             item[key].insert(0, from_date)
     query = json.dumps(query)
     return query
 
@@ -227,13 +229,13 @@ def get_task_ids(admin_data, date_after=None, cam=None):
         page = 1
         if date_after:
             payload = {
-                "filter": generate_filter_query(project_id, date.strftime('%Y-%m-%d'), after, camera=cam)
+                "filter": generate_filter_query(project_id, after, from_date=after, camera=cam)
             }
         else:
             payload = {
                 'filter': generate_filter_query(project_id, date.strftime('%Y-%m-%d'), camera=cam)
             }
-            print(f"payload===> : {payload}")
+        print(f"payload===> : {payload}")
         while True:
             if page > 1:
                 payload['page'] = page

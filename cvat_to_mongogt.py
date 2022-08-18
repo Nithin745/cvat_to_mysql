@@ -316,7 +316,7 @@ class PushToMongoDb:
             delete = self.db['rishon_lezion_71_planograms'].delete_many({
                 'taks_id': {'$in': match}
             })
-            delete_task = seld.db['rishon_lezion_71_pg_tasks']. delete_many({
+            delete_task = self.db['rishon_lezion_71_pg_tasks']. delete_many({
                 'taks_id': {'$in': match}
                 })
             insert = self.db['rishon_lezion_71_planograms'].insert_many(tasks)
@@ -481,10 +481,11 @@ class PushToMongoDb:
         """This method generates filename for the video_id column"""
         if planogram:
             filename = filename.lstrip('planogram_')
-            date_time = '_'.join(filename.split('_', 2)[:2])
-            return date_time, date_time + '_' + camera
+            # date_time = '_'.join(filename.split('_', 2)[:2])
+            # return date_time, date_time + '_' + camera
         date_time = '_'.join(filename.split('_', 2)[:2])
-        return date_time, date_time + f'_{self.retailer_id}_{self.branch_id}_' + camera
+        return date_time, date_time + '_' + camera
+        # return date_time, date_time + f'_{self.retailer_id}_{self.branch_id}_' + camera
 
 
 def main():
@@ -495,7 +496,8 @@ def main():
     date = get_last_entry_date(db['rishon_lezion_71_planograms'])
     if date:
         download_json(date=date)
-    download_json()
+    else:
+        download_json()
     if any(os.scandir(src_folder)):
         for file in os.listdir(src_folder):
             path = os.path.join(src_folder, file)
