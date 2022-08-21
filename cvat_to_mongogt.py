@@ -248,7 +248,7 @@ class PushToMongoDb:
         pg_tasks = []
         for task in self.tasks:
             person = []
-            planogram = None
+            # planogram = None
             planogram_flag = False
             # Filtering frames that belongs to current task_id
             imgs = [i for i in self.images if task['task_id'] == i['task_id']]
@@ -288,12 +288,10 @@ class PushToMongoDb:
             final_buyer = self.build_collection(buyer_table, person, task['task_id'])
             match = self.check_for_match(final_buyer, planogram_flag)
             print(f"Buyer Length: {len(final_buyer)}")
-            # if match:
-            #     self.update_data(final_buyer, match, planogram_flag)
-            # else:
-            #     self.insert_new(final_buyer, planogram_flag)
-            # print(task['task_id'])
-            # print(final_buyer)
+            if match:
+                self.update_data(final_buyer, match, planogram_flag)
+            else:
+                self.insert_new(final_buyer, planogram_flag)
         if planogram_coll:
             # print(planogram_coll)
             match = self.check_for_match(planogram_coll, planogram_flag)
@@ -314,19 +312,20 @@ class PushToMongoDb:
     def update_data(self, records, match, planagram, tasks=None):
         if planagram:
             delete = self.db['rishon_lezion_71_planograms'].delete_many({
-                'taks_id': {'$in': match}
+                'task_id': {'$in': match}
             })
             delete_task = self.db['rishon_lezion_71_pg_tasks']. delete_many({
-                'taks_id': {'$in': match}
+                'task_id': {'$in': match}
                 })
             insert = self.db['rishon_lezion_71_planograms'].insert_many(tasks)
             task_insert = self.db['rishon_lezion_71_pg_tasks'].insert_many(tasks)
+            print(insert.inserted_ids)
+            print(task_insert.inserted_ids)
         else:
             delete = self.db['rishon_lezion_71_gt'].delete_many({
-                'taks_id': {'$in': match}
+                'task_id': {'$in': match}
             })
             insert = self.db['rishon_lezion_71_gt'].insert_many(records)
-            print(insert.inserted_ids)
 
     def insert_new(self, records, planagram, pg_tasks):
         if planagram:
@@ -337,7 +336,7 @@ class PushToMongoDb:
             print(insert.inserted_ids)
 
     def build_planogram(self, images: dict) -> dict:
-        del images['file_name']
+        # del images['file_name']
         for item in images['annotations']:
             del item['id']
             del item['image_id']
