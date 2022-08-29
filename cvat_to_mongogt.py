@@ -57,7 +57,7 @@ def delete_entries():
 class PrepareJson:
     """
     This module prepares the json file that is downloaded from cvat and merge images and their annotations in 
-    a single json object by making some changes to the json file, So, that it is easy to upload it to MySql
+    a single json object by making some changes to the json file, So, that it is easy to upload it to Process
     """
 
     def __init__(self, path, file, dest_path):
@@ -428,6 +428,8 @@ class PushToMongoDb:
                                 action = 'hts'
                             elif action == 'h':
                                 action = 'hh'
+                            if age == -1:
+                                age = '-'
                             buyer = {
                                 # 'task_id': task_id,
                                 'filename': filename,
@@ -455,6 +457,8 @@ class PushToMongoDb:
                                 hand = 'hts'
                             elif hand == 'h':
                                 hand = 'hh'
+                            if age == -1:
+                                age = '-'
                             buyer = {
                                 # 'task_id': task_id,
                                 'filename': filename,
@@ -488,8 +492,9 @@ class PushToMongoDb:
 
 
 def main():
-    """This is the main function that calls all the modules to downloa all the json file,
-    process it and  push it to MySql
+    """
+        This is the main function that calls all the modules to downloa all the json file,
+        process it and  push it to MySql
     """
     db = connect_db()
     date = get_last_entry_date(db['rishon_lezion_71_planograms'])
