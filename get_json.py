@@ -242,6 +242,7 @@ def get_task_ids(admin_data, date_after=None, cam=None):
                 'filter': generate_filter_query(project_id, date.strftime('%Y-%m-%d'), camera=cam)
             }
             print(f"payload===> : {payload}")
+        payload.update({'page_size': 250})
         while True:
             if page > 1:
                 payload['page'] = page
