@@ -6,7 +6,7 @@ import json
 import string
 import os
 from get_json import main as download_json
-from label_map import action_map
+from label_map import action_map, hand_map
 import pymongo
 import re
 import sys
@@ -17,12 +17,15 @@ words = string.ascii_lowercase
 src_folder = os.path.join(os.getcwd(), 'files')
 dest_path = os.path.join(os.getcwd(), 'result')
 TASK_URL = os.environ.get('BASE_URL') + 'tasks/'
+MONGO_URL = os.environ.get('MONGO_URL')
+MONGO_COLLECTION = os.environ.get('MONGO_COLLECTION')
+MONGO_VIDEO = os.environ.get('MONGO_VIDEO')
+MONGO_EVENT = os.environ.get('MONGO_EVENT')
 
 
 def connect_db():
-    client = pymongo.MongoClient(
-        "mongodb+srv://Pradeep:ShopperAI@israel.dien7.mongodb.net/?retryWrites=true&w=majority")
-    db = client['victory']
+    client = pymongo.MongoClient(MONGO_URL)
+    db = client[MONGO_COLLECTION]
 
     return db
 
@@ -34,7 +37,7 @@ def get_last_entry_date(tasks):
         last_date = date[0]['completed_date']
     except:
         return None
-    
+
     return last_date.split('T')[0]
 
 
@@ -48,10 +51,11 @@ def clean_dir():
         for item in result:
             os.remove(os.path.join(dest_path, item))
 
+
 def delete_entries():
     db = connect_db()
-    db['rishon_lezion_71_planograms'].delete_many({})
-    db['rishon_lezion_71_pg_tasks'].delete_many({})
+    db[MONGO_EVENT].delete_many({})
+    # db[MONGO_VIDEO].delete_many({})
 
 
 class PrepareJson:
@@ -153,7 +157,7 @@ class PrepareJson:
                     del item['id']
                 if key == 'images':
                     del item['id']
-                    del item['video']
+                    # del item['video']
 
     def save_json(self):
         self.delete_junks()
@@ -166,7 +170,7 @@ class PrepareJson:
     def add_camera_id_field(self, pattern='camera[0-9]+'):
         for obj in self.data['tasks']:
             # camera_id_idxs = (re.search('camera', obj['video'].lower()).span())
-            filename = obj['video']
+            filename = obj['name']
             if 'planogram' in obj['name']:
                 filename = obj['name']
             try:
@@ -198,12 +202,12 @@ class PushToMongoDb:
         self.check_previous_entries()
 
     def check_previous_entries(self):
-        planagram = self.db['rishon_lezion_71_planograms'].find({}, projection ={'task_id':True})
+        # planagram = self.db['rishon_lezion_71_planograms'].find({}, projection={'task_id': True})
         gt_list = []
-        for item in planagram:
-            self.planagram.append(item['task_id'])
+        # for item in planagram:
+        #     self.planagram.append(item['task_id'])
 
-        gt = self.db['rishon_lezion_71_gt'].find({}, projection ={'task_id':True})
+        gt = self.db[MONGO_VIDEO].find({}, projection={'task_id': True})
         for gt_item in gt:
             try:
                 gt_list.append(gt_item['task_id'])
@@ -256,7 +260,7 @@ class PushToMongoDb:
                 planogram_flag = True
                 filename = task['name']
             else:
-                filename = task['video']
+                filename = task['name']
             for img in imgs:  # Loop through the filtered images
                 sec = self.get_sec(img['file_name'])  # This gets the seconds for the current frame
                 frame_no = self.get_frame_no(img['file_name'])
@@ -274,7 +278,7 @@ class PushToMongoDb:
                     planogram_coll.append(image.copy())
                     # self.db['rishon_lezion_71_planograms'].insert_one(image)
                 else:
-                    filename = task['video']
+                    filename = task['name']
                     buyer = self.get_video_data(
                         img, filename, sec, task['task_id'], frame_no, planogram_flag)
                     if buyer:
@@ -284,22 +288,17 @@ class PushToMongoDb:
                             if buy['buyer_id'] not in person:
                                 person.append(buy['buyer_id'])
 
-        if buyer_table:  # If buyer data and action is not empty we are ready to push it to MongoDB
-            final_buyer = self.build_collection(buyer_table, person, task['task_id'])
-            match = self.check_for_match(final_buyer, planogram_flag)
-            print(f"Buyer Length: {len(final_buyer)}")
-            if match:
-                self.update_data(final_buyer, match, planogram_flag)
-            else:
-                self.insert_new(final_buyer, planogram_flag)
-        if planogram_coll:
-            # print(planogram_coll)
-            match = self.check_for_match(planogram_coll, planogram_flag)
-            print(f"Planogram length: {len(planogram_coll)} {len(pg_tasks)}")
-            if match:
-                self.update_data(planogram_coll, match, planogram_flag, pg_tasks)
-            else:
-                self.insert_new(planogram_coll, planogram_flag, pg_tasks)
+            if buyer_table:  # If buyer data and action is not empty we are ready to push it to MongoDB
+                final_buyer = self.build_collection(buyer_table, person, task['task_id'])
+                # match = self.check_for_match(final_buyer, planogram_flag)
+                for item in final_buyer:
+                    print(item['task_id'], item['buyer_id'])
+                    insert_task = self.db[MONGO_VIDEO].find_one_and_update({'task_id': item['task_id']},
+                            {'$set': task}, upsert=True)
+                    insert_gt = self.db[MONGO_EVENT].find_one_and_update({'buyer_id': item['buyer_id']}, {
+                        '$set': item
+                    }, upsert=True)
+                buyer_table = []
 
     def check_for_match(self, data, planagram):
         if planagram:
@@ -308,32 +307,6 @@ class PushToMongoDb:
             match = [item['task_id'] for item in data if item['task_id'] in self.gt]
 
         return match
-
-    def update_data(self, records, match, planagram, tasks=None):
-        if planagram:
-            delete = self.db['rishon_lezion_71_planograms'].delete_many({
-                'task_id': {'$in': match}
-            })
-            delete_task = self.db['rishon_lezion_71_pg_tasks']. delete_many({
-                'task_id': {'$in': match}
-                })
-            insert = self.db['rishon_lezion_71_planograms'].insert_many(tasks)
-            task_insert = self.db['rishon_lezion_71_pg_tasks'].insert_many(tasks)
-            print(insert.inserted_ids)
-            print(task_insert.inserted_ids)
-        else:
-            delete = self.db['rishon_lezion_71_gt'].delete_many({
-                'task_id': {'$in': match}
-            })
-            insert = self.db['rishon_lezion_71_gt'].insert_many(records)
-
-    def insert_new(self, records, planagram, pg_tasks):
-        if planagram:
-            insert = self.db['rishon_lezion_71_planograms'].insert_many(records)
-            insert = self.db['rishon_lezion_71_pg_tasks'].insert_many(pg_tasks)
-        else:
-            insert = self.db['rishon_lezion_71_gt'].insert_many(records)
-            print(insert.inserted_ids)
 
     def build_planogram(self, images: dict) -> dict:
         # del images['file_name']
@@ -348,62 +321,111 @@ class PushToMongoDb:
         buyers_list = []
         for i in persons:
             buyer_list = [item for item in buyers if item['buyer_id'] == i]
-            age, gender, filename = self.get_age(buyer_list)
+            age, gender, filename, buyer_id = self.get_age(buyer_list)
             # print(age, gender)
-            action = self.build_buyer(buyer_list)
+            action, products = self.build_buyer(buyer_list)
             buyer_dict = {
-                'age': age,
-                'gender': gender,
-                'buyer_id': filename + '_' + i,
-                'actions': action,
-                'task_id': task_id
+                'buyer_id': filename + '_' + buyer_id,
+                'actions_preds': action,
+                'task_id': task_id,
+                'creation_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
-            buyers_list.append(buyer_dict.copy())
-        with open(filename + '.json', 'w') as F:
-            json.dump(buyers_list, F, indent=4)
+            if age:
+                buyer_dict.update({
+                    'age': age['age'],
+                    'face_frame': age['frame'],
+                    'face_bbox': age['bbox']
+                })
+            if gender:
+                buyer_dict.update({
+                    'gender': gender['gender'],
+                    'gender_frame': gender['frame']
+                })
+            if products:
+                buyer_dict.update({
+                    'product_preds': products
+                })
+            buyers_list.append(deepcopy(buyer_dict))
+        # with open(filename + '.json', 'w') as F:
+        #     json.dump(buyers_list, F, indent=4)
 
         return buyers_list
 
     def build_buyer(self, buyers):
-        actions = []
+        actions, products = [], {}
         for buyer in buyers:
-            act_dict = {
-                'name': action_map[buyer['action']],
-                'second_in_video': buyer['sec'],
-                'frame_index': buyer['frame_no'],
-                'bbox': buyer['bbox'],
-            }
-            actions.append(act_dict.copy())
+            if buyer['type'] == 'action':
+                act_dict = {
+                    'name': buyer['action'],
+                    'second_in_video': buyer['sec'],
+                    'frame_index': buyer['frame_no'],
+                    'bbox': buyer['bbox'],
+                }
+                actions.append(act_dict.copy())
+            elif buyer['type'] == 'hand':
+                hand_dict = {
+                    'bbox': buyer['bbox'],
+                    'label': buyer['action']
+                }
+                if buyer['product'] != self.default:
+                    hand_dict.update({
+                        'product': buyer['product'],
+                    })
+                products.update({
+                    buyer['sec']: hand_dict
+                })
+                # products.append(product.copy())
 
-        return actions
+        return actions, products
 
     def get_age(self, buyers):
-        # age, gender = None, None
+        age = {
+            'age': '-',
+            'frame': '-',
+            'bbox': '-'
+        }
+        gender = {
+            'gender': '-',
+            'frame': '-'
+        }
         for buyer in buyers:
-            age, gender = buyer['age'], buyer['gender']
-            if age not in self.empty and gender not in self.empty:
-                break
-            elif age in self.empty and gender not in self.empty:
-                break
-            elif age not in self.empty and gender in self.empty:
-                break
-            elif age in self.empty and gender in self.empty:
-                continue
+            if buyer['type'] == 'action':
+                if buyer['gender'] != '-':
+                    gender = {
+                        'gender': buyer['gender'],
+                        'frame': buyer['frame_no']
+                    }
+                if buyer['age'] != '-':
+                    age = {
+                        'age': buyer['age'],
+                        'frame': buyer['frame_no'],
+                        'bbox': buyer['bbox']
+                    }
 
-        return age, gender, buyer['filename']
+        return age, gender, buyer['filename'], buyer['buyer_id']
 
-    def get_sec(self, frame, sec=.5):
+    def get_sec(self, frame, sec=.05):
         """This method returns seconds for the given frame"""
-        frame = frame.rstrip('.PNG')
-        frame = int(frame.split('_')[1]) / 10
+        frame = frame.rstrip('.jpg')
+        frame = frame.split('_')[1]
+        if int(frame) == 0:
+            frame = int(frame)
+        else:
+            frame = int(frame.lstrip('0'))
+        # print(f"Frame: {frame}")
         # print(frame, f"{(frame * sec):.1f}")
         return f"{(frame * sec):.1f}"
 
     def get_frame_no(self, frame):
         """This method returns seconds for the given frame"""
-        frame = frame.rstrip('.PNG')
+        frame = frame.rstrip('.jpg')
+        frame = frame.split('_')[1]
+        if int(frame) == 0:
+            frame = int(frame)
+        else:
+            frame = int(frame.lstrip('0'))
 
-        return int(frame.split('_')[1]) / 10
+        return frame
 
     def get_video_data(self, images, filename, sec, task_id, frame_no, planogram):
         """This method extracts buyer with `id`, `action` and `hand` lables"""
@@ -416,7 +438,7 @@ class PushToMongoDb:
                 for annotation in images['annotations']:
                     if annotation['category_name'] == 'actions' and annotation['attributes'] is not None:
                         if 'person_id' in annotation['attributes'] and 'action' in annotation['attributes']:
-                            age, gender, product = self.default, self.default, self.default
+                            # age, gender, product = self.default, self.default, self.default
                             person_id, action = annotation['attributes']['person_id'], annotation['attributes']['action']
                             if 'demographic_age' in annotation['attributes']:
                                 age = annotation['attributes']['demographic_age']
@@ -424,56 +446,47 @@ class PushToMongoDb:
                                 gender = annotation['attributes']['demographic_gender']
                             # if 'product' in annotation['attributes']:
                             #     product = annotation['attributes']['product']
-                            if action == 'ts':
-                                action = 'hts'
-                            elif action == 'h':
-                                action = 'hh'
-                            if age == -1:
-                                age = '-'
                             buyer = {
-                                # 'task_id': task_id,
+                                'task_id': task_id,
                                 'filename': filename,
                                 'buyer_id': person_id,
                                 'age': age,
                                 'gender': gender,
-                                'action': action,
+                                'action': action_map[action],
                                 'sec': sec,
                                 'frame_no': frame_no,
-                                'bbox': annotation['bbox']
+                                'bbox': annotation['bbox'],
+                                'type': 'action'
                             }
                             if person_id == '' or person_id in words:
                                 buyer = None
                     elif annotation['category_name'] == 'hands' and annotation['attributes'] is not None:
                         if 'person_id' in annotation['attributes'] and 'hand' in annotation['attributes']:
-                            age, gender, product = self.default, self.default, self.default
                             person_id, hand = annotation['attributes']['person_id'], annotation['attributes']['hand']
-                            if 'demographic_age' in annotation['attributes']:
-                                age = annotation['attributes']['demographic_age']
-                            if 'demographic_gender' in annotation['attributes']:
-                                gender = annotation['attributes']['demographic_gender']
-                            # if 'product' in annotation['attributes']:
-                            #     product = annotation['attributes']['product']
-                            if hand == 'ts':
-                                hand = 'hts'
-                            elif hand == 'h':
-                                hand = 'hh'
-                            if age == -1:
-                                age = '-'
+                            product = self.default
+                            # if 'demographic_age' in annotation['attributes']:
+                            #     age = annotation['attributes']['demographic_age']
+                            # if 'demographic_gender' in annotation['attributes']:
+                            #     gender = annotation['attributes']['demographic_gender']
+                            if 'product' in annotation['attributes']:
+                                product = annotation['attributes']['product']
                             buyer = {
-                                # 'task_id': task_id,
+                                'task_id': task_id,
                                 'filename': filename,
                                 'buyer_id': person_id,
-                                'age': age,
-                                'gender': gender,
-                                'action': hand,
+                                # 'age': age,
+                                # 'gender': gender,
+                                'action': hand_map[hand],
                                 'sec': sec,
                                 'frame_no': frame_no,
-                                'bbox': annotation['bbox']
+                                'bbox': annotation['bbox'],
+                                'product': product,
+                                'type': 'hand'
                             }
                             if person_id == '' or person_id in words:
                                 buyer = None
                     if buyer:
-                        buyer_data.append(buyer)
+                        buyer_data.append(buyer.copy())
                         buyer = None
                     else:
                         continue
@@ -497,7 +510,7 @@ def main():
         process it and  push it to MySql
     """
     db = connect_db()
-    date = get_last_entry_date(db['rishon_lezion_71_planograms'])
+    date = get_last_entry_date(db[MONGO_VIDEO])
     if date:
         download_json(date=date)
     else:
@@ -512,7 +525,7 @@ def main():
             print(f"Path: {target_path}")
             mongo_data = PushToMongoDb(target_path)
             mongo_data.push_to_mongo()
-        clean_dir()
+        # clean_dir()
 
 
 if __name__ == '__main__':

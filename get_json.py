@@ -191,7 +191,7 @@ def generate_filter_query(project_id, to_date, from_date=None, status="completed
                 ]
             },
             {
-                ">=": [{"var": "id"}, 15655]
+                ">=": [{"var": "id"}, 16110]
             }
         ]
     }
@@ -235,6 +235,7 @@ def get_task_ids(admin_data, date_after=None, cam=None):
             payload = {
                 'filter': generate_filter_query(project_id, date.strftime('%Y-%m-%d'), camera=cam)
             }
+        payload.update({'page_size': 200})
         print(f"payload===> : {payload}")
         while True:
             if page > 1:

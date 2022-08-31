@@ -28,3 +28,15 @@ class Hello:
 for i in range(5):
     greet = Hello()
     greet.greet('Nithin')
+
+def get_frame_no(frame):
+    """This method returns seconds for the given frame"""
+    frame = frame.rstrip('.PNG')
+
+    return int(frame.split('_')[1].lstrip('0'))
+
+numb = get_frame_no('frame_00001.PNG')
+print(numb)
+
+sd = [{'id':1}, {'id': 2}]
+print(**sd)
