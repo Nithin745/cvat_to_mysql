@@ -12,7 +12,7 @@ action_map = {
 
 hand_map = {
     '-': '-',
-    'h': 'hand',
+    'h': 'hold',
     'ts': 'touch',
     'hp': 'hold',
 }

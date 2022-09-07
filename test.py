@@ -29,14 +29,29 @@ for i in range(5):
     greet = Hello()
     greet.greet('Nithin')
 
+
 def get_frame_no(frame):
     """This method returns seconds for the given frame"""
     frame = frame.rstrip('.PNG')
 
     return int(frame.split('_')[1].lstrip('0'))
 
+
 numb = get_frame_no('frame_00001.PNG')
 print(numb)
 
-sd = [{'id':1}, {'id': 2}]
-print(**sd)
+def mod_list(l: list):
+    l[0] = l[0]+10
+
+    return l.copy()
+
+
+def get_list(l: list):
+    l[0] = l[0]+1
+
+    return l.copy()
+
+tr = [1, 2, 3]
+res = get_list(tr)
+act = mod_list(tr)
+f = 'sss'

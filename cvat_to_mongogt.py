@@ -29,6 +29,11 @@ def connect_db():
 
     return db
 
+def fix_bbox(bbox: list) -> list:
+    bbox[2] = bbox[2] + bbox[0]
+    bbox[3] = bbox[3] + bbox[1]
+
+    return bbox.copy()
 
 def get_last_entry_date(tasks):
     date = tasks.find({}).sort('completed_date', -1)
@@ -129,6 +134,7 @@ class PrepareJson:
         category = self.data['categories']
         category_ids = [ids['id'] for ids in category]
         for item in self.data['annotations']:
+            item['bbox'] = fix_bbox(item['bbox'])
             if int(item['category_id']) in category_ids:
                 name = self.get_category_name(item, category_ids, category)
                 item['category_name'] = name
@@ -319,11 +325,14 @@ class PushToMongoDb:
 
     def build_collection(self, buyers, persons, task_id):
         buyers_list = []
+        age_dict = None
         for i in persons:
             buyer_list = [item for item in buyers if item['buyer_id'] == i]
+            act_list = buyer_list.copy()
             age, gender, filename, buyer_id = self.get_age(buyer_list)
+            age_dict = deepcopy(age)
             # print(age, gender)
-            action, products = self.build_buyer(buyer_list)
+            action, products = self.build_buyer(act_list)
             buyer_dict = {
                 'buyer_id': filename + '_' + buyer_id,
                 'actions_preds': action,
@@ -332,10 +341,11 @@ class PushToMongoDb:
             }
             if age:
                 buyer_dict.update({
-                    'age': age['age'],
-                    'face_frame': age['frame'],
-                    'face_bbox': age['bbox']
+                    'age': age_dict['age'],
+                    'face_frame': age_dict['frame'],
+                    'face_bbox': age_dict['bbox']
                 })
+                age_dict = None
             if gender:
                 buyer_dict.update({
                     'gender': gender['gender'],
@@ -355,13 +365,14 @@ class PushToMongoDb:
         actions, products = [], {}
         for buyer in buyers:
             if buyer['type'] == 'action':
-                act_dict = {
-                    'name': buyer['action'],
-                    'second_in_video': buyer['sec'],
-                    'frame_index': buyer['frame_no'],
-                    'bbox': buyer['bbox'],
-                }
-                actions.append(act_dict.copy())
+                if buyer['age'] == '-':
+                    act_dict = {
+                        'name': buyer['action'],
+                        'second_in_video': buyer['sec'],
+                        'frame_index': buyer['frame_no'],
+                        'bbox': buyer['bbox'],
+                    }
+                    actions.append(act_dict.copy())
             elif buyer['type'] == 'hand':
                 hand_dict = {
                     'bbox': buyer['bbox'],
