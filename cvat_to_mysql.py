@@ -13,6 +13,9 @@ import requests
 
 
 words = string.ascii_lowercase
+s = requests.Session()
+s.headers = _header()
+xtask = []
 
 src_folder = os.path.join(os.getcwd(), 'files')
 dest_path = os.path.join(os.getcwd(), 'result')
@@ -65,14 +68,17 @@ def mark_as_processed(task_id):
     # with open('processed_id.json', 'r') as F:
     #     data = json.load(F)
     # task_ids = data['task_id']
-    headers = _header()
-    payload = {"processed: True"}
+    payload = {"processed": True}
     url = TASK_URL + str(task_id)
-    res = requests.patch(url=url, json=payload, headers=headers)
+    # h1 = s.headers
+    res = s.patch(url=url, json=payload)
     if res.ok:
         print(f"Marked task {task_id} as processed")
     else:
         print(f"Error while marking task as processed {res.text}")
+        print(res.request.headers)
+        print(res.url)
+        sys.exit()
 
 
 def delete_entries(task_id):
@@ -207,7 +213,7 @@ class PrepareJson:
                     del item['id']
                 if key == 'images':
                     del item['id']
-                    del item['video']
+                   # del item['video']
 
     def save_json(self):
         self.delete_junks()
@@ -220,16 +226,18 @@ class PrepareJson:
     def add_camera_id_field(self, pattern='camera[0-9]+'):
         for obj in self.data['tasks']:
             # camera_id_idxs = (re.search('camera', obj['video'].lower()).span())
-            filename = obj['video']
             if 'planogram' in obj['name']:
                 filename = obj['name']
             try:
+                try:
+                    filename = obj['video']
+                except:
+                    filename = obj['name']
                 camera_id_str = re.findall(pattern, filename.lower())[0]
                 camera_id = camera_id_str[len("camera"):]
                 obj['camera_id'] = camera_id
             except:
-                print("Warning - Cannot find camera number in video {}".format(obj['video']))
-
+                print("Warning - Cannot find camera number in video {}".format(filename))
 
 class PushToMySql:
     """
@@ -249,15 +257,16 @@ class PushToMySql:
         self.default = '-'
         self.empty = ['0', '-']
 
-    def get_camera_name(self, filename, pattern='camera[0-9]+'):
+    def get_camera_name(self, filename, planogram=False, pattern='camera[0-9]+'):
         """This return the camera name and camera number"""
         camera_id = False
+        if planogram:
+            filename = filename.lstrip('planogram_')
         try:
             camera_id_str = re.findall(pattern, filename.lower())[0]
             camera_id = camera_id_str[len("camera"):]
-            # print(camera_id_str)
         except:
-            print("Worning - Cannot find camera number in video {}".format(filename))
+            print("Workning - Cannot find camera number in video {}".format(filename))
 
         return camera_id_str, camera_id
 
@@ -287,9 +296,17 @@ class PushToMySql:
             # Filtering frames that belongs to current task_id
             imgs = [i for i in self.images if task['task_id'] == i['task_id']]
             for img in imgs:  # Loop through the filtered images
+                try:
+                    if task['name'].startswith('planogram'):
+                        continue
+                except:
+                    continue
                 sec = self.get_sec(img['file_name'])  # This gets the seconds for the current frame
                 # Get data for all the tables video, buyer, actions
-                video, buyer, action = self.get_video_data(img, task['video'], sec, task['task_id'])
+                try:
+                    video, buyer, action = self.get_video_data(img, task['video'], sec, task['task_id'])
+                except:
+                    video, buyer, action = self.get_video_data(img, task['name'], sec, task['task_id'])
                 if buyer:
                     for buy in buyer:
                         f_name, person_id, age, gender = buy
@@ -315,7 +332,7 @@ class PushToMySql:
                 except Exception as e:
                     print(f"Video Error: {video_table}")
                     print(e)
-                    # sys.exit()
+                    sys.exit()
                 actions = self.get_actions_buyer(action_table)
                 try:
                     inject_to_sql("INSERT INTO buyer (video_id, buyer_id, age, gender) VALUES \
@@ -337,7 +354,8 @@ class PushToMySql:
                         print(f"Action Error: {actions}")
                         print(e)
                         # sys.exit()
-                    mark_as_processed(task['task_id'])
+        mark_as_processed(task['task_id'])
+        xtask.append(task['task_id'])
 
     def filter_buyer(self, person, buyer):
         """
@@ -367,8 +385,21 @@ class PushToMySql:
 
     def get_sec(self, frame, sec=.5):
         """This method returns seconds for the given frame"""
-        frame = frame.rstrip('.PNG')
-        frame = int(frame.split('_')[1]) / 10
+        try:
+            frame = frame.rstrip('.PNG')
+            frame = int(frame.split('_')[1]) / 10
+        except:
+            sec = .05
+            frame = frame.rstrip('.jpg')
+            try:
+                frame = frame.split('_')[1]
+            except:
+                frame = frame.split('e')[1]
+            if int(frame) == 0:
+                frame = int(frame)
+            else:
+                frame = int(frame.lstrip('0'))
+            
         # print(frame, f"{(frame * sec):.1f}")
         return f"{(frame * sec):.1f}"
 
@@ -449,7 +480,7 @@ def main():
     """This is the main function that calls all the modules to downloa all the json file,
     process it and  push it to MySql
     """
-    camera = ['camera5', 'camera6', 'camera7']
+    camera = ['camera5', 'camera6', 'camera7', 'camera10']
     for cam in camera:
         download_json(cam)
         if any(os.scandir(src_folder)):
@@ -466,6 +497,8 @@ def main():
 
 if __name__ == '__main__':
     main()
-    # log = {'updated_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-    # with open('log1.json', 'w') as F:
-    #     json.dump(log, F, indent=4)
+    log = {'updated_time': xtask}
+    with open('log1.json', 'w') as F:
+        json.dump(log, F, indent=4)
+    print(xtask)
+    s.close()
