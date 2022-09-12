@@ -21,6 +21,7 @@ MONGO_URL = os.environ.get('MONGO_URL')
 MONGO_COLLECTION = os.environ.get('MONGO_COLLECTION')
 MONGO_VIDEO = os.environ.get('MONGO_VIDEO')
 MONGO_EVENT = os.environ.get('MONGO_EVENT')
+MONGO_MVP= os.environ.get('MONGO_MVP')
 
 
 def connect_db():
@@ -227,6 +228,8 @@ class PushToMongoDb:
         camera_id = False
         if planogram:
             filename = filename.lstrip('planogram_')
+        elif 'mvpkpi' in filename:
+            filename = filename.lstrip('mvpkpi_')
         try:
             camera_id_str = re.findall(pattern, filename.lower())[0]
             camera_id = camera_id_str[len("camera"):]
@@ -254,6 +257,7 @@ class PushToMongoDb:
         This is the main function where we push the data to MongoDB
         """
         buyer_table = []
+        mvpkpi = []
         planogram_coll = []
         pg_tasks = []
         for task in self.tasks:
@@ -301,9 +305,14 @@ class PushToMongoDb:
                     print(item['task_id'], item['buyer_id'])
                     insert_task = self.db[MONGO_VIDEO].find_one_and_update({'task_id': item['task_id']},
                             {'$set': task}, upsert=True)
-                    insert_gt = self.db[MONGO_EVENT].find_one_and_update({'buyer_id': item['buyer_id']}, {
-                        '$set': item
-                    }, upsert=True)
+                    if 'mvpkpi' in task['name']:
+                        insert_mvp = self.db[MONGO_MVP].find_one_and_update({'buyer_id': item['buyer_id']}, {
+                            '$set': item
+                        }, upsert=True)
+                    else:
+                        insert_gt = self.db[MONGO_EVENT].find_one_and_update({'buyer_id': item['buyer_id']}, {
+                            '$set': item
+                        }, upsert=True)
                 buyer_table = []
 
     def check_for_match(self, data, planagram):
@@ -364,6 +373,7 @@ class PushToMongoDb:
     def build_buyer(self, buyers):
         actions, products = [], {}
         for buyer in buyers:
+            print(buyer)
             if buyer['type'] == 'action':
                 if buyer['age'] == '-':
                     act_dict = {
@@ -412,8 +422,11 @@ class PushToMongoDb:
                         'frame': buyer['frame_no'],
                         'bbox': buyer['bbox']
                     }
+        filename = buyer['filename']
+        if 'mvpkpi' in buyer['filename']:
+            filename = buyer['filename'].lstrip('mvpkpi_')
 
-        return age, gender, buyer['filename'], buyer['buyer_id']
+        return age, gender, filename, buyer['buyer_id']
 
     def get_sec(self, frame, sec=.05):
         """This method returns seconds for the given frame"""
@@ -520,12 +533,12 @@ def main():
         This is the main function that calls all the modules to downloa all the json file,
         process it and  push it to MySql
     """
-    db = connect_db()
-    date = get_last_entry_date(db[MONGO_VIDEO])
-    if date:
-        download_json(date=date)
-    else:
-        download_json()
+    # db = connect_db()
+    # date = get_last_entry_date(db[MONGO_VIDEO])
+    # if date:
+    #     download_json()
+    # else:
+    #     download_json()
     if any(os.scandir(src_folder)):
         for file in os.listdir(src_folder):
             path = os.path.join(src_folder, file)
