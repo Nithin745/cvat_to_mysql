@@ -21,7 +21,7 @@ MONGO_URL = os.environ.get('MONGO_URL')
 MONGO_COLLECTION = os.environ.get('MONGO_COLLECTION')
 MONGO_VIDEO = os.environ.get('MONGO_VIDEO')
 MONGO_EVENT = os.environ.get('MONGO_EVENT')
-MONGO_MVP= os.environ.get('MONGO_MVP')
+MONGO_MVP = os.environ.get('MONGO_MVP')
 
 
 def connect_db():
@@ -30,11 +30,13 @@ def connect_db():
 
     return db
 
+
 def fix_bbox(bbox: list) -> list:
     bbox[2] = bbox[2] + bbox[0]
     bbox[3] = bbox[3] + bbox[1]
 
     return bbox.copy()
+
 
 def get_last_entry_date(tasks):
     date = tasks.find({}).sort('completed_date', -1)
@@ -60,7 +62,7 @@ def clean_dir():
 
 def delete_entries():
     db = connect_db()
-    db[MONGO_EVENT].delete_many({})
+    db[MONGO_MVP].delete_many({})
     # db[MONGO_VIDEO].delete_many({})
 
 
@@ -95,8 +97,14 @@ class PrepareJson:
     def _split_data(self, tasks, idx, images):
         task = tasks[idx]
         img_ids = [ids['id'] for ids in images]
-        annotations = [item for item in self.data['annotations']
-                       if item['image_id'] in img_ids]
+        annotations = []
+        for item in self.data['annotations']:
+            try:
+                _ = item['bbox']
+                if item['image_id'] in img_ids:
+                    annotations.append(item)
+            except KeyError:
+                continue
         images = self.merge_annotations(images, annotations)
 
         return task, images
@@ -135,7 +143,10 @@ class PrepareJson:
         category = self.data['categories']
         category_ids = [ids['id'] for ids in category]
         for item in self.data['annotations']:
-            item['bbox'] = fix_bbox(item['bbox'])
+            try:
+                item['bbox'] = fix_bbox(item['bbox'])
+            except KeyError:
+                continue
             if int(item['category_id']) in category_ids:
                 name = self.get_category_name(item, category_ids, category)
                 item['category_name'] = name
@@ -267,10 +278,7 @@ class PushToMongoDb:
             # Filtering frames that belongs to current task_id
             imgs = [i for i in self.images if task['task_id'] == i['task_id']]
             if 'planogram' in task['name']:
-                planogram_flag = True
-                filename = task['name']
-            else:
-                filename = task['name']
+                continue
             for img in imgs:  # Loop through the filtered images
                 sec = self.get_sec(img['file_name'])  # This gets the seconds for the current frame
                 frame_no = self.get_frame_no(img['file_name'])
@@ -373,7 +381,6 @@ class PushToMongoDb:
     def build_buyer(self, buyers):
         actions, products = [], {}
         for buyer in buyers:
-            print(buyer)
             if buyer['type'] == 'action':
                 if buyer['age'] == '-':
                     act_dict = {
@@ -430,6 +437,7 @@ class PushToMongoDb:
 
     def get_sec(self, frame, sec=.05):
         """This method returns seconds for the given frame"""
+        # print(frame, '~~~~~~~~~~~~~~~~~~~~~~~~')
         frame = frame.rstrip('.jpg')
         frame = frame.split('_')[1]
         if int(frame) == 0:
@@ -519,10 +527,8 @@ class PushToMongoDb:
 
     def get_filename(self, filename: str, camera, planogram):
         """This method generates filename for the video_id column"""
-        if planogram:
-            filename = filename.lstrip('planogram_')
-            # date_time = '_'.join(filename.split('_', 2)[:2])
-            # return date_time, date_time + '_' + camera
+        if 'mvpkpi' in filename:
+            filename = filename.lstrip('mvpkpi_')
         date_time = '_'.join(filename.split('_', 2)[:2])
         return date_time, date_time + '_' + camera
         # return date_time, date_time + f'_{self.retailer_id}_{self.branch_id}_' + camera
@@ -533,12 +539,12 @@ def main():
         This is the main function that calls all the modules to downloa all the json file,
         process it and  push it to MySql
     """
-    # db = connect_db()
-    # date = get_last_entry_date(db[MONGO_VIDEO])
-    # if date:
-    #     download_json()
-    # else:
-    #     download_json()
+    db = connect_db()
+    date = get_last_entry_date(db[MONGO_VIDEO])
+    if date:
+        download_json(date)
+    else:
+        download_json()
     if any(os.scandir(src_folder)):
         for file in os.listdir(src_folder):
             path = os.path.join(src_folder, file)
